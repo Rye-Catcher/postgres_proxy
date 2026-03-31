@@ -129,3 +129,103 @@ func TestRouterRoundRobin(t *testing.T) {
 		t.Errorf("round-robin not distributing: %v", seen)
 	}
 }
+
+// TestRouterSelectForUpdateToPrimary verifies that locking SELECTs go to primary.
+func TestRouterSelectForUpdateToPrimary(t *testing.T) {
+	primary := makeNode("postgres://primary:5432/db", true)
+	replica := makeNode("postgres://replica:5432/db", true)
+	metrics := &Metrics{}
+	router := NewRouter(primary, []*DBNode{replica}, metrics, testLogger())
+
+	lockingQueries := []string{
+		"SELECT * FROM users FOR UPDATE",
+		"SELECT * FROM users FOR SHARE",
+		"SELECT * FROM users FOR NO KEY UPDATE",
+		"SELECT * FROM users FOR KEY SHARE",
+	}
+
+	for _, sql := range lockingQueries {
+		dsn, err := router.Route(sql)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", sql, err)
+		}
+		if dsn != primary.DSN {
+			t.Errorf("%q routed to %q, want primary %q", sql, dsn, primary.DSN)
+		}
+	}
+}
+
+// TestRouterSideEffectSelectToPrimary verifies that SELECTs calling
+// state-modifying functions are routed to primary.
+func TestRouterSideEffectSelectToPrimary(t *testing.T) {
+	primary := makeNode("postgres://primary:5432/db", true)
+	replica := makeNode("postgres://replica:5432/db", true)
+	metrics := &Metrics{}
+	router := NewRouter(primary, []*DBNode{replica}, metrics, testLogger())
+
+	sideEffectQueries := []string{
+		"SELECT nextval('seq_test')",
+		"SELECT setval('seq_test', 100)",
+		"SELECT pg_advisory_lock(1)",
+		"SELECT pg_advisory_unlock(1)",
+		"SELECT txid_current()",
+	}
+
+	for _, sql := range sideEffectQueries {
+		dsn, err := router.Route(sql)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", sql, err)
+		}
+		if dsn != primary.DSN {
+			t.Errorf("%q routed to %q, want primary %q", sql, dsn, primary.DSN)
+		}
+	}
+}
+
+// TestRouterWriteCTEToPrimary verifies that CTEs containing DML go to primary.
+func TestRouterWriteCTEToPrimary(t *testing.T) {
+	primary := makeNode("postgres://primary:5432/db", true)
+	replica := makeNode("postgres://replica:5432/db", true)
+	metrics := &Metrics{}
+	router := NewRouter(primary, []*DBNode{replica}, metrics, testLogger())
+
+	writeCTEs := []string{
+		"WITH ins AS (INSERT INTO users(name) VALUES ('a') RETURNING id) SELECT * FROM ins",
+		"WITH upd AS (UPDATE users SET name='c' WHERE id=1 RETURNING *) SELECT * FROM upd",
+		"WITH del AS (DELETE FROM users WHERE id=1 RETURNING *) SELECT * FROM del",
+	}
+
+	for _, sql := range writeCTEs {
+		dsn, err := router.Route(sql)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", sql, err)
+		}
+		if dsn != primary.DSN {
+			t.Errorf("%q routed to %q, want primary %q", sql, dsn, primary.DSN)
+		}
+	}
+}
+
+// TestRouterMultiStatementToPrimary verifies that multi-statement queries go to primary.
+func TestRouterMultiStatementToPrimary(t *testing.T) {
+	primary := makeNode("postgres://primary:5432/db", true)
+	replica := makeNode("postgres://replica:5432/db", true)
+	metrics := &Metrics{}
+	router := NewRouter(primary, []*DBNode{replica}, metrics, testLogger())
+
+	multiStatements := []string{
+		"SELECT * FROM users; INSERT INTO users VALUES (2,'b')",
+		"BEGIN; SELECT * FROM users; COMMIT",
+		"SET search_path TO public; SELECT * FROM users",
+	}
+
+	for _, sql := range multiStatements {
+		dsn, err := router.Route(sql)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", sql, err)
+		}
+		if dsn != primary.DSN {
+			t.Errorf("%q routed to %q, want primary %q", sql, dsn, primary.DSN)
+		}
+	}
+}
