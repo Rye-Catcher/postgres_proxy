@@ -1,0 +1,11 @@
+# Binary output
+postgres_proxy
+
+# Go build cache
+*.test
+*.out
+
+# Editor files
+.idea/
+.vscode/
+*.swp
