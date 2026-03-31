@@ -438,3 +438,60 @@ func TestIsMultiStatement(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Transaction control statements
+// ---------------------------------------------------------------------------
+
+// TestParseQueryType_TransactionStatements verifies that all transaction
+// control statements (BEGIN variants, COMMIT, ROLLBACK variants, SAVEPOINT,
+// RELEASE SAVEPOINT, START TRANSACTION) are classified as writes so they are
+// always sent to the primary.
+func TestParseQueryType_TransactionStatements(t *testing.T) {
+	cases := []struct {
+		name string
+		sql  string
+	}{
+		// BEGIN variants
+		{"begin", "BEGIN"},
+		{"begin_work", "BEGIN WORK"},
+		{"begin_transaction", "BEGIN TRANSACTION"},
+		{"begin_read_only", "BEGIN READ ONLY"},
+		{"begin_read_write", "BEGIN READ WRITE"},
+		{"begin_repeatable_read", "BEGIN ISOLATION LEVEL REPEATABLE READ"},
+		{"begin_serializable", "BEGIN ISOLATION LEVEL SERIALIZABLE"},
+		{"begin_read_committed", "BEGIN ISOLATION LEVEL READ COMMITTED"},
+		{"begin_read_uncommitted", "BEGIN ISOLATION LEVEL READ UNCOMMITTED"},
+		// START TRANSACTION
+		{"start_transaction", "START TRANSACTION"},
+		{"start_transaction_rr", "START TRANSACTION ISOLATION LEVEL REPEATABLE READ"},
+		// COMMIT variants
+		{"commit", "COMMIT"},
+		{"commit_work", "COMMIT WORK"},
+		{"commit_transaction", "COMMIT TRANSACTION"},
+		// ROLLBACK variants
+		{"rollback", "ROLLBACK"},
+		{"rollback_work", "ROLLBACK WORK"},
+		{"rollback_transaction", "ROLLBACK TRANSACTION"},
+		{"rollback_to", "ROLLBACK TO s1"},
+		{"rollback_to_savepoint", "ROLLBACK TO SAVEPOINT s1"},
+		// Savepoints
+		{"savepoint", "SAVEPOINT s1"},
+		{"release_savepoint", "RELEASE SAVEPOINT s1"},
+		// Case insensitivity
+		{"begin_lower", "begin"},
+		{"commit_lower", "commit"},
+		{"rollback_lower", "rollback"},
+		{"savepoint_lower", "savepoint sp"},
+		{"start_upper", "START TRANSACTION"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ParseQueryType(tc.sql)
+			if got != QueryTypeWrite {
+				t.Errorf("ParseQueryType(%q) = %v, want Write (primary)", tc.sql, got)
+			}
+		})
+	}
+}

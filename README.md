@@ -160,12 +160,38 @@ go test -v -run TestRouter ./...
 | `TestRouterSideEffectSelectToPrimary` | `router_test.go` | Side-effect SELECTs routed to primary end-to-end |
 | `TestRouterWriteCTEToPrimary` | `router_test.go` | Write CTEs routed to primary end-to-end |
 | `TestRouterMultiStatementToPrimary` | `router_test.go` | Multi-statement queries routed to primary end-to-end |
+| `TestParseQueryType_TransactionStatements` | `parser_test.go` | All transaction control syntax classified as writes |
+| `TestTransactionRouter_SingleTransaction` | `transaction_router_test.go` | BEGIN→SELECT→UPDATE→SELECT→COMMIT all pinned to primary |
+| `TestTransactionRouter_ReadOnlyTransaction` | `transaction_router_test.go` | `BEGIN READ ONLY` pinned to primary |
+| `TestTransactionRouter_RepeatableRead` | `transaction_router_test.go` | `BEGIN ISOLATION LEVEL …` variants pinned to primary |
+| `TestTransactionRouter_Rollback` | `transaction_router_test.go` | ROLLBACK ends pin; subsequent SELECTs return to replica |
+| `TestTransactionRouter_Savepoints` | `transaction_router_test.go` | SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT lifecycle on primary |
+| `TestTransactionRouter_ErrorInTransaction` | `transaction_router_test.go` | Pin held through DB-level error until explicit ROLLBACK |
+| `TestTransactionRouter_StartTransaction` | `transaction_router_test.go` | `START TRANSACTION` syntax pins to primary |
+| `TestTransactionRouter_MultipleSequentialTransactions` | `transaction_router_test.go` | Pin/unpin correctly over multiple back-to-back transactions |
 
 ### Building
 
 ```bash
 go build -o postgres_proxy .
 ```
+
+### Transaction Routing Policy
+
+`TransactionRouter` (`transaction_router.go`) is a per-session wrapper around `Router` that tracks whether a transaction is open. The policy is:
+
+| Situation | Backend |
+|---|---|
+| No active transaction, read query | Replica (round-robin) |
+| No active transaction, write query | Primary |
+| `BEGIN` / `START TRANSACTION` | Primary — opens the transaction pin |
+| Any statement while transaction is active | Primary — pin remains until COMMIT/ROLLBACK |
+| `COMMIT` / `ROLLBACK` | Primary — releases the pin |
+| `BEGIN READ ONLY` | Primary (pinned for simplicity and correctness) |
+| `BEGIN ISOLATION LEVEL …` | Primary (pinned — isolation semantics require a single backend) |
+| `SAVEPOINT` / `RELEASE SAVEPOINT` | Primary — session-state operations |
+
+**Rationale:** Routing read-only or repeatable-read transactions to a replica would require the proxy to understand replication lag and snapshot visibility guarantees. Pinning all transactions to the primary is the safe and simple default; it can be revisited once the proxy implements lag-aware replica selection.
 
 ### Project Structure
 
@@ -175,6 +201,7 @@ go build -o postgres_proxy .
 | `config.go` | Configuration loading from env vars |
 | `parser.go` | SQL query type detection |
 | `router.go` | Query routing logic (primary vs. replica) |
+| `transaction_router.go` | Per-session transaction-aware routing wrapper |
 | `proxy.go` | TCP proxy and connection handling |
 | `health.go` | Background health checker, DBNode |
 | `metrics.go` | Atomic counters and Prometheus exposition |
