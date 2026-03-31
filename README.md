@@ -1,5 +1,7 @@
 # PostgreSQL Proxy — Read/Write Splitting
 
+[![Test](https://github.com/Rye-Catcher/postgres_proxy/actions/workflows/test.yml/badge.svg)](https://github.com/Rye-Catcher/postgres_proxy/actions/workflows/test.yml)
+
 A lightweight TCP proxy for PostgreSQL that automatically routes read queries (SELECT) to replica nodes and write queries (INSERT, UPDATE, DELETE, DDL) to the primary node.
 
 ## Features
@@ -111,11 +113,53 @@ host=localhost port=5432 user=pguser password=pgpassword dbname=appdb sslmode=di
 
 ## Development
 
-### Running Tests
+### Running Tests Locally
+
+The test suite covers SQL parsing, query routing, and all edge cases described below.
+No running PostgreSQL instance is required — all tests use in-memory stubs.
 
 ```bash
+# Run all tests (quiet)
 go test ./...
+
+# Run all tests with verbose output
+go test -v ./...
+
+# Run tests with the race detector enabled (recommended before submitting a PR)
+go test -race ./...
+
+# Run a specific test function
+go test -v -run TestParseQueryType_CTETraps ./...
+
+# Run tests matching a pattern
+go test -v -run TestRouter ./...
 ```
+
+#### Test coverage
+
+| Test group | File | What it covers |
+|---|---|---|
+| `TestParseQueryType_Reads` | `parser_test.go` | Basic read statements (SELECT, SHOW, EXPLAIN, DESCRIBE, WITH) |
+| `TestParseQueryType_Writes` | `parser_test.go` | Basic write statements (INSERT, UPDATE, DELETE, DDL, TCL) |
+| `TestParseQueryType_Empty` | `parser_test.go` | Empty / comment-only input defaults to write |
+| `TestParseQueryType_SelectToPrimary` | `parser_test.go` | `SELECT … FOR UPDATE/SHARE`, `nextval`, `setval`, `pg_advisory_lock/unlock`, `txid_current` → primary |
+| `TestParseQueryType_CTETraps` | `parser_test.go` | CTEs with `INSERT`/`UPDATE`/`DELETE` → primary; read-only CTEs → replica |
+| `TestParseQueryType_CommentsAndWhitespace` | `parser_test.go` | Leading `--` and `/* */` comments; misleading comments containing write keywords |
+| `TestParseQueryType_CaseSensitivity` | `parser_test.go` | Mixed-case keywords (`SeLeCt`, `InSeRt`, …) |
+| `TestParseQueryType_MultiStatement` | `parser_test.go` | Semicolon-separated multi-statement queries → primary |
+| `TestParseQueryType_Explain` | `parser_test.go` | `EXPLAIN` → replica; `EXPLAIN ANALYZE` → primary |
+| `TestParseQueryType_SpecialStatements` | `parser_test.go` | COPY, VACUUM, ANALYZE, REINDEX, LISTEN, NOTIFY, SET, RESET, DISCARD, PREPARE, EXECUTE |
+| `TestFirstKeyword` / `TestStripComments` / helpers | `parser_test.go` | Internal parser helpers |
+| `TestRouterWritesToPrimary` | `router_test.go` | Write queries always route to primary |
+| `TestRouterReadsToReplica` | `router_test.go` | Read queries route to a healthy replica |
+| `TestRouterReadsFallBackToPrimary` | `router_test.go` | Fallback to primary when all replicas are unhealthy |
+| `TestRouterNoReplicas` | `router_test.go` | Reads go to primary when no replicas are configured |
+| `TestRouterUnhealthyPrimary` | `router_test.go` | Error returned when primary is unhealthy |
+| `TestRouterRoundRobin` | `router_test.go` | Load is spread evenly across multiple replicas |
+| `TestRouterSelectForUpdateToPrimary` | `router_test.go` | Locking SELECTs routed to primary end-to-end |
+| `TestRouterSideEffectSelectToPrimary` | `router_test.go` | Side-effect SELECTs routed to primary end-to-end |
+| `TestRouterWriteCTEToPrimary` | `router_test.go` | Write CTEs routed to primary end-to-end |
+| `TestRouterMultiStatementToPrimary` | `router_test.go` | Multi-statement queries routed to primary end-to-end |
 
 ### Building
 
